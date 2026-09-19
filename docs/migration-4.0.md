@@ -297,6 +297,42 @@ What changes for compiling code:
 - **Bindings arrive only on `order_update_stream()`.** They do not reach the per-order `place_order` subscription, even for this client's own orders: API order IDs are scoped to a client ID, and the transport does not filter on it, so a binding for another client's order 42 must not land on a local subscription for order 42. This matches the official client, which delivers `orderBound` only to the global wrapper callback. Consume bindings from the update stream and key on `perm_id` when you need an account-wide identity.
 - **A binding grants nothing.** Knowing another client's `(client_id, order_id)` does not let this client modify or cancel that order.
 
+### 12. One `TimeInForce`: `orders::builder::TimeInForce` is removed and the variants are spelled "till"
+
+3.x exported two `TimeInForce` enums naming the same wire values with different identifiers: `orders::TimeInForce` on `Order.tif` (spelled `GoodTilCanceled`), and `orders::builder::TimeInForce` taken by `OrderBuilder::time_in_force` (spelled `GoodTillCancel`). The builder converted between them by formatting to the wire string and re-parsing, and `orders::TimeInForce` had no `GTX` variant, so `builder::TimeInForce::GoodTillCrossing` was silently submitted as `DAY`.
+
+In 4.0 the builder enum is gone and `OrderBuilder::time_in_force` takes `orders::TimeInForce`. Its variants now use "till", matching IB's own `goodTillDate`, the `Order.good_till_date` field and the builder setters, and it gains `GoodTillCrossing` (`GTX`). Wire strings are unchanged.
+
+```rust,ignore
+// 3.x
+use ibapi::orders::builder::TimeInForce;
+client.order(&contract).buy(100).limit(50.0).time_in_force(TimeInForce::GoodTillCancel).submit()?;
+let order = Order { tif: ibapi::orders::TimeInForce::GoodTilCanceled, ..Default::default() };
+
+// 4.0
+use ibapi::orders::TimeInForce;
+client.order(&contract).buy(100).limit(50.0).time_in_force(TimeInForce::GoodTillCanceled).submit()?;
+let order = Order { tif: TimeInForce::GoodTillCanceled, ..Default::default() };
+```
+
+Rename the variants from either 3.x enum:
+
+| `orders::builder::TimeInForce` (3.x) | `orders::TimeInForce` (3.x) | `orders::TimeInForce` (4.0) |
+|---|---|---|
+| `Day` | `Day` | `Day` |
+| `GoodTillCancel` | `GoodTilCanceled` | `GoodTillCanceled` |
+| `ImmediateOrCancel` | `ImmediateOrCancel` | `ImmediateOrCancel` |
+| `GoodTillDate { date }` | `GoodTilDate` | `GoodTillDate`, with the date passed to `.good_till_date(date)` or `.good_till_time(date)` |
+| `FillOrKill` | `FillOrKill` | `FillOrKill` |
+| `GoodTillCrossing` | (none; parsed as `Day`) | `GoodTillCrossing` (new) |
+| `DayTillCanceled` | `DayTilCanceled` | `DayTillCanceled` |
+| `Auction` | `Auction` | `Auction` |
+| `OpeningAuction` | `OnOpen` | `OnOpen` |
+
+The named setters (`.day_order()`, `.good_till_cancel()`, `.good_till_date(..)`, `.fill_or_kill()`, `.immediate_or_cancel()`) are unchanged, and `.good_till_crossing()` and `.day_till_canceled()` are added. `.time_in_force(TimeInForce::GoodTillDate)` without a date still fails `build()` with `ValidationError::MissingRequiredField("good_till_date")`. The builder keeps the GTD date only in the field written by `.good_till_date(..)` / `.good_till_time(..)`; in 3.x a date carried in the `GoodTillDate { date }` payload took precedence over one set through those methods; now the last one set wins.
+
+Exhaustive matches on `orders::TimeInForce` need a `GoodTillCrossing` arm.
+
 ## Behavioral changes
 
 No code changes required, but observable at runtime:
@@ -326,7 +362,8 @@ No code changes required, but observable at runtime:
 9. Add an `OrderStatusKind::Unknown(raw)` arm to exhaustive matches on order statuses, and `.clone()` (or borrow) where code relied on the removed `Copy` — see [§9](#9-orderstatuskind-gains-unknownstring).
 10. If you serialize market-data types to JSON, update downstream consumers: sizes are now `number | null` instead of `integer`, and notices may carry `request_id`.
 11. Add an `OrderUpdate::OrderBound(binding)` arm to exhaustive matches on order updates, and read bindings from `order_update_stream()` — they never reach `place_order` subscriptions; see [§11](#11-orderupdate-gains-orderbound).
-12. Re-run `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and your test suite for each feature flag you support.
+12. Use `ibapi::orders::TimeInForce` everywhere (`ibapi::orders::builder::TimeInForce` is gone) and spell the variants "till": `GoodTilCanceled` → `GoodTillCanceled`, `GoodTilDate` → `GoodTillDate`, `DayTilCanceled` → `DayTillCanceled`; from the builder enum, `GoodTillCancel` → `GoodTillCanceled`, `OpeningAuction` → `OnOpen`, `GoodTillDate { date }` → `GoodTillDate` plus `.good_till_date(date)`. Add a `GoodTillCrossing` arm to exhaustive matches — see [§12](#12-one-timeinforce-ordersbuildertimeinforce-is-removed-and-the-variants-are-spelled-till).
+13. Re-run `cargo fmt`, `cargo clippy --all-targets --all-features -- -D warnings`, and your test suite for each feature flag you support.
 
 ## Need help?
 
