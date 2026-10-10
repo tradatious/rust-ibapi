@@ -192,11 +192,13 @@ pub(crate) trait StreamDecoder<T> {
     /// handshake is their only caller now.
     fn decode(context: &DecoderContext, message: &ResponseMessage) -> Result<T, Error>;
 
-    /// The message TWS sends after the last item, which `decode` turns into
-    /// `Error::EndOfStream`. A `buffer_limit` cap always lets it through, so a
-    /// result that fills the cap exactly still ends normally. `None` (the
-    /// default): no terminal end marker, so the stream can't be capped.
-    const END_MESSAGE: Option<IncomingMessages> = None;
+    /// The messages TWS sends after the last item, which `decode` turns into
+    /// `Error::EndOfStream`. **Exactly** those: `response_message_ids_tests.rs`
+    /// checks the list against the `decode` arms. A `buffer_limit` cap always
+    /// lets them through, so a result that fills the cap exactly still ends
+    /// normally. Empty (the default): the stream has no end marker, and only
+    /// an error ends a capped stream.
+    const END_MESSAGES: &'static [IncomingMessages] = &[];
 
     /// Keep a request-bound error notice nonterminal when this decoder knows
     /// the request remains active: the subscription yields it as

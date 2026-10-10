@@ -63,6 +63,7 @@ impl StreamDecoder<Orders> for Orders {
         IncomingMessages::OpenOrderEnd,
         IncomingMessages::CompletedOrdersEnd,
     ];
+    const END_MESSAGES: &'static [IncomingMessages] = &[IncomingMessages::OpenOrderEnd, IncomingMessages::CompletedOrdersEnd];
 
     fn decode(_context: &DecoderContext, message: &ResponseMessage) -> Result<Orders, Error> {
         match message.message_type() {
@@ -81,6 +82,7 @@ impl StreamDecoder<Executions> for Executions {
         IncomingMessages::CommissionsReport,
         IncomingMessages::ExecutionDataEnd,
     ];
+    const END_MESSAGES: &'static [IncomingMessages] = &[IncomingMessages::ExecutionDataEnd];
 
     fn decode(_context: &DecoderContext, message: &ResponseMessage) -> Result<Executions, Error> {
         match message.message_type() {

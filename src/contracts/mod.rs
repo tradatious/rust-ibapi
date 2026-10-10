@@ -16,7 +16,9 @@ use crate::encode_option_field;
 use crate::ToField;
 
 // Re-export builder and contract types
-pub use crate::transport::MAX_BUFFER_LIMIT;
+/// The largest `buffer_limit`.
+#[deprecated(since = "5.1.0", note = "use `ibapi::subscriptions::MAX_BUFFER_LIMIT`")]
+pub const MAX_BUFFER_LIMIT: usize = crate::subscriptions::MAX_BUFFER_LIMIT;
 pub use builders::*;
 pub use common::contract_builder::ContractBuilder;
 pub use contract_details_builder::ContractDetailsBuilder;

@@ -60,7 +60,7 @@ impl<'a, C> ContractDetailsBuilder<'a, C> {
     /// client capped by `ClientBuilder::channel_capacity` with the oldest rows
     /// dropped (reported as a lag notice).
     ///
-    /// `limit` must be `1..=`[`MAX_BUFFER_LIMIT`](crate::contracts::MAX_BUFFER_LIMIT); otherwise `subscribe`
+    /// `limit` must be `1..=`[`MAX_BUFFER_LIMIT`](crate::subscriptions::MAX_BUFFER_LIMIT); otherwise `subscribe`
     /// returns [`Error::InvalidArgument`] without sending.
     ///
     /// On the async client only the original subscription's reads count. A

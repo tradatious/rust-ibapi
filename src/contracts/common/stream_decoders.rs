@@ -43,7 +43,7 @@ impl StreamDecoder<ContractDetails> for ContractDetails {
         IncomingMessages::BondContractData,
         IncomingMessages::ContractDataEnd,
     ];
-    const END_MESSAGE: Option<IncomingMessages> = Some(IncomingMessages::ContractDataEnd);
+    const END_MESSAGES: &'static [IncomingMessages] = &[IncomingMessages::ContractDataEnd];
 
     fn decode(_context: &DecoderContext, message: &ResponseMessage) -> Result<ContractDetails, Error> {
         match message.message_type() {
@@ -68,7 +68,7 @@ impl StreamDecoder<OptionChain> for OptionChain {
         IncomingMessages::SecurityDefinitionOptionParameter,
         IncomingMessages::SecurityDefinitionOptionParameterEnd,
     ];
-    const END_MESSAGE: Option<IncomingMessages> = Some(IncomingMessages::SecurityDefinitionOptionParameterEnd);
+    const END_MESSAGES: &'static [IncomingMessages] = &[IncomingMessages::SecurityDefinitionOptionParameterEnd];
 
     fn decode(_context: &DecoderContext, message: &ResponseMessage) -> Result<OptionChain, Error> {
         match message.message_type() {

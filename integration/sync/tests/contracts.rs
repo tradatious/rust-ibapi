@@ -2,6 +2,7 @@ use ibapi::client::blocking::Client;
 use ibapi::contracts::{Contract, Currency, Exchange, OptionRight, SecurityType, Symbol};
 use ibapi::subscriptions::{Drained, SubscriptionItem};
 use ibapi::Error;
+use ibapi_integration_sync::read_to_terminal;
 use ibapi_test::{rate_limit, yyyymm_months_from_now, ClientId, AAPL_CON_ID, GATEWAY};
 use serial_test::serial;
 
@@ -303,17 +304,4 @@ fn option_chain_buffer_limit_fails_a_stalled_reader() {
     let (chains, outcome) = read_to_terminal(|| subscription.next());
     assert!(chains >= 3, "every queued chain is delivered before the error, got {chains}");
     assert!(matches!(outcome, Some(Err(Error::BufferLimitExceeded { limit: 3 }))), "got {outcome:?}");
-}
-
-/// Count data items until the first terminal item (end of stream or error),
-/// logging notices; returns the count and that terminal item.
-fn read_to_terminal<T>(mut next: impl FnMut() -> Option<Result<SubscriptionItem<T>, Error>>) -> (usize, Option<Result<SubscriptionItem<T>, Error>>) {
-    let mut count = 0;
-    loop {
-        match next() {
-            Some(Ok(SubscriptionItem::Data(_))) => count += 1,
-            Some(Ok(SubscriptionItem::Notice(notice))) => eprintln!("notice: {notice}"),
-            other => return (count, other),
-        }
-    }
 }
