@@ -11,9 +11,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `generic_tick::ETF_FROZEN_NAV_LAST` (`"623"`, frozen-data ETF NAV last price, tick 97) (#946).
 - `OptionChainBuilder::request_id()` and `OptionChainBuilder::buffer_limit(n)`, as on `ContractDetailsBuilder`. The id is allocated when the builder is made, so it is known before anything is sent; `subscribe()` sends once (no retry). TWS has no cancel for this request (#902).
+- `HistoricalDataBuilder::buffer_limit(n)` caps unread items on `stream()`, as on `ContractDetailsBuilder`. The stream has no end marker (`HistoricalBarUpdate::End` after the initial bars is an item and counts), so a reader that stops reading always overflows eventually. `fetch()` returns `InvalidArgument` when it is set (#902).
+- `subscriptions::MAX_BUFFER_LIMIT`, the largest `buffer_limit` for every builder (#902).
 
 ### Deprecated
 
+- `contracts::MAX_BUFFER_LIMIT`. Use `subscriptions::MAX_BUFFER_LIMIT`; the limit applies to every builder with `buffer_limit`, not only contracts (#902).
 - `generic_tick::ETF_NAV_FROZEN_LAST`. Its value, `"578"`, is the generic tick IB's earlier tick table gives for the ETF NAV close and prior close (ticks 92 and 93), not the frozen NAV last price (tick 97) its name and docs promised, and TWS rejects it (error 321). Use `ETF_FROZEN_NAV_LAST` for tick 97 (#946).
 - `generic_tick::ETF_NAV_BID` (`"576"`). TWS rejects it (error 321), and IB's current tick-type page no longer lists it; there is no replacement.
 

@@ -70,7 +70,7 @@ impl<'a, C> OptionChainBuilder<'a, C> {
     /// ends. The end marker and errors always get through. Same semantics
     /// and caveats as
     /// [`ContractDetailsBuilder::buffer_limit`](crate::contracts::ContractDetailsBuilder::buffer_limit);
-    /// `limit` must be `1..=`[`MAX_BUFFER_LIMIT`](crate::contracts::MAX_BUFFER_LIMIT).
+    /// `limit` must be `1..=`[`MAX_BUFFER_LIMIT`](crate::subscriptions::MAX_BUFFER_LIMIT).
     ///
     /// # Examples
     #[cfg_attr(
