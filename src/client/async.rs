@@ -146,14 +146,20 @@ impl Client {
         self.server_version
     }
 
-    /// Returns the connection time
+    /// Returns the gateway's clock reading when the client connected, or
+    /// `None` if the zone is unrecognized (see [`time_zone`](Self::time_zone))
+    /// or the reading is malformed.
     pub fn connection_time(&self) -> Option<OffsetDateTime> {
         self.connection_time
     }
 
-    /// Returns the server's time zone, or `None` if the gateway sent a name
-    /// that no alias or IANA zone matches (logged as a warning at connect).
-    /// Map such a name with [`register_timezone_alias`](crate::register_timezone_alias).
+    /// Returns the time zone of the gateway host, from the connection handshake.
+    ///
+    /// Informational: the crate does not convert any data with it. `None` if
+    /// the gateway sent a name that no alias or IANA zone matches (logged as a
+    /// warning at connect). Map such a name with
+    /// [`register_timezone_alias`](crate::register_timezone_alias). See
+    /// [Gateway Time Zone](https://github.com/wboayue/rust-ibapi/blob/main/docs/troubleshooting.md#gateway-time-zone).
     pub fn time_zone(&self) -> Option<&'static Tz> {
         self.time_zone
     }
