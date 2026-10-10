@@ -90,6 +90,8 @@ tempfile = "3.13"
 # raw-capture env-var test; `with_var` only takes a blocking closure.
 temp-env = { version = "0.3.6", features = ["async_closure"] }
 serial_test = "4.0.1"
+# Paused clock for the async rate-limiter test.
+tokio = { version = "1.41", features = ["test-util"] }
 toml = "1.0"
 # toml_edit = "0.22"  # Not needed - we're custom generating TOML
 

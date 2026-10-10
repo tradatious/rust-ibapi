@@ -18,6 +18,7 @@ use crate::client::ids::{OrderId, RequestId, WireId};
 use crate::connection::sync::Connection;
 
 use super::common::{log_orphan, report_unroutable_frame, validate_frame_length, Lease, LeaseRef};
+use super::rate_limiter::RateLimiter;
 use super::raw_capture::RawFrameTap;
 use super::routing::{
     classify_error, determine_routing, order_routing_strategy, order_update_notice, DecodedError, ErrorDisposition, OrderRoutingStrategy,
@@ -26,7 +27,9 @@ use super::routing::{
 use super::{
     Admit, BoundState, BufferBound, InternalSubscription, MessageBus, Response, RoutedItem, SharedCounts, SharedTicket, Signal, SubscriptionBuilder,
 };
-use crate::messages::{shared_channel_configuration, transport_reconnect_notice, IncomingMessages, Notice, OutgoingMessages, ResponseMessage};
+use crate::messages::{
+    is_cancel_frame, shared_channel_configuration, transport_reconnect_notice, IncomingMessages, Notice, OutgoingMessages, ResponseMessage,
+};
 use crate::subscriptions::notice_stream::sync_impl::NoticeStream;
 use crate::Error;
 
@@ -326,6 +329,9 @@ pub struct TcpMessageBus<S: Stream> {
     /// [`Self::set_order_ids`] before the dispatcher thread starts; absent in
     /// bus-only test fixtures, which never reconnect a client.
     order_ids: OnceLock<Arc<ClientIdManager>>,
+    /// Outbound rate limiter, if the client was built with one. Installed
+    /// once via [`Self::set_rate_limiter`] before any request is sent.
+    rate_limiter: OnceLock<RateLimiter>,
     order_update_stream: Mutex<Option<Entry<RoutedItem>>>,
     /// Session state, and what `wait_connected` blocks on.
     connection_state: ConnectionSignal,
@@ -350,6 +356,7 @@ impl<S: Stream> TcpMessageBus<S> {
             shutdown_recv,
             shutdown,
             order_ids: OnceLock::new(),
+            rate_limiter: OnceLock::new(),
             order_update_stream: Mutex::new(None),
             connection_state: ConnectionSignal::default(),
         })
@@ -360,6 +367,12 @@ impl<S: Stream> TcpMessageBus<S> {
     /// before the dispatcher thread starts.
     pub(crate) fn set_order_ids(&self, order_ids: Arc<ClientIdManager>) {
         self.order_ids.set(order_ids).expect("order-id generator installed twice");
+    }
+
+    /// Installs the outbound rate limiter. Called at most once, before the
+    /// client sends anything.
+    pub(crate) fn set_rate_limiter(&self, limiter: RateLimiter) {
+        self.rate_limiter.set(limiter).expect("rate limiter installed twice");
     }
 
     fn is_shutting_down(&self) -> bool {
@@ -427,6 +440,21 @@ impl<S: Stream> TcpMessageBus<S> {
     /// socket the session no longer owns. The dispatcher's own reconnect
     /// handshake writes through `Connection`, not here.
     fn write_message(&self, message: &[u8]) -> Result<(), Error> {
+        self.throttle(message);
+        self.write_now(message)
+    }
+
+    /// Waits for the rate limiter, if any. Shared-channel paths call this
+    /// before taking the `counts` lock, so a throttled request never holds up
+    /// a cancel queued on that lock.
+    fn throttle(&self, message: &[u8]) {
+        if let Some(limiter) = self.rate_limiter.get() {
+            limiter.acquire_blocking(is_cancel_frame(message));
+        }
+    }
+
+    /// Writes without throttling; the connected check runs after any wait.
+    fn write_now(&self, message: &[u8]) -> Result<(), Error> {
         self.ensure_connected()?;
         self.connection.write_message(message)
     }
@@ -868,7 +896,8 @@ impl<S: Stream> TcpMessageBus<S> {
         let lease = Lease::new();
         let lease_ref = lease.downgrade();
         self.shared_channels.add(message_type, sender.clone(), lease_ref.clone());
-        let ticket = match self.shared_channels.subscribe(message_type, account, || self.write_message(message)) {
+        self.throttle(message);
+        let ticket = match self.shared_channels.subscribe(message_type, account, || self.write_now(message)) {
             Ok(ticket) => ticket,
             Err(e) => {
                 self.shared_channels.remove(&lease_ref);
@@ -971,8 +1000,13 @@ impl<S: Stream> MessageBus for TcpMessageBus<S> {
     }
 
     fn cancel_shared_subscription(&self, ticket: SharedTicket, message: Option<&[u8]>) -> Result<(), Error> {
+        // Throttled before the lock: some cancels (account updates) are
+        // requests with an off flag and do wait.
+        if let Some(message) = message {
+            self.throttle(message);
+        }
         self.shared_channels
-            .unsubscribe(ticket, || message.map_or(Ok(()), |message| self.write_message(message)))
+            .unsubscribe(ticket, || message.map_or(Ok(()), |message| self.write_now(message)))
     }
 
     fn notice_subscribe(&self) -> NoticeStream {

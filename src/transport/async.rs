@@ -35,10 +35,11 @@ use crate::accounts::types::AccountId;
 use crate::client::id_generator::ClientIdManager;
 use crate::client::ids::{OrderId, RequestId, WireId};
 use crate::connection::r#async::AsyncConnection;
-use crate::messages::{transport_reconnect_notice, IncomingMessages, Notice, OutgoingMessages, ResponseMessage};
+use crate::messages::{is_cancel_frame, transport_reconnect_notice, IncomingMessages, Notice, OutgoingMessages, ResponseMessage};
 use crate::Error;
 
 use super::common::{log_orphan, report_unroutable_frame, Lease, LeaseRef};
+use super::rate_limiter::RateLimiter;
 use super::routing::{
     classify_error, determine_routing, order_routing_strategy, order_update_notice, DecodedError, ErrorDisposition, OrderRoutingStrategy,
     RoutingDecision,
@@ -481,6 +482,9 @@ pub struct AsyncTcpMessageBus<S: AsyncStream = AsyncTcpSocket> {
     /// [`Self::set_order_ids`] before the processing task starts; absent in
     /// bus-only test fixtures, which never reconnect a client.
     order_ids: OnceLock<Arc<ClientIdManager>>,
+    /// Outbound rate limiter, if the client was built with one. Installed
+    /// once via [`Self::set_rate_limiter`] before any request is sent.
+    rate_limiter: OnceLock<RateLimiter>,
     /// Session state, and what `wait_connected` awaits.
     connection_state: Arc<ConnectionSignal>,
 }
@@ -528,6 +532,7 @@ impl<S: AsyncStream> AsyncTcpMessageBus<S> {
             process_task: Arc::new(RwLock::new(None)),
             shutdown,
             order_ids: OnceLock::new(),
+            rate_limiter: OnceLock::new(),
             connection_state: Arc::new(ConnectionSignal::default()),
         };
 
@@ -583,6 +588,12 @@ impl<S: AsyncStream> AsyncTcpMessageBus<S> {
     /// before [`Self::process_messages`] starts the processing task.
     pub(crate) fn set_order_ids(&self, order_ids: Arc<ClientIdManager>) {
         self.order_ids.set(order_ids).expect("order-id generator installed twice");
+    }
+
+    /// Installs the outbound rate limiter. Called at most once, before the
+    /// client sends anything.
+    pub(crate) fn set_rate_limiter(&self, limiter: RateLimiter) {
+        self.rate_limiter.set(limiter).expect("rate limiter installed twice");
     }
 
     /// Start processing messages from TWS
@@ -755,6 +766,21 @@ impl<S: AsyncStream> AsyncTcpMessageBus<S> {
     /// socket the session no longer owns. The dispatcher's own reconnect
     /// handshake writes through `AsyncConnection`, not here.
     async fn write_message(&self, message: &[u8]) -> Result<(), Error> {
+        self.throttle(message).await;
+        self.write_now(message).await
+    }
+
+    /// Waits for the rate limiter, if any. Shared-channel paths call this
+    /// before taking the `counts` lock, so a throttled request never holds up
+    /// a cancel queued on that lock.
+    async fn throttle(&self, message: &[u8]) {
+        if let Some(limiter) = self.rate_limiter.get() {
+            limiter.acquire(is_cancel_frame(message)).await;
+        }
+    }
+
+    /// Writes without throttling; the connected check runs after any wait.
+    async fn write_now(&self, message: &[u8]) -> Result<(), Error> {
         self.ensure_connected()?;
         self.connection.write_message(message).await
     }
@@ -1043,11 +1069,9 @@ impl<S: AsyncStream> AsyncTcpMessageBus<S> {
         message: Vec<u8>,
     ) -> Result<AsyncInternalSubscription, Error> {
         self.ensure_connected()?;
+        self.throttle(&message).await;
 
-        let (receiver, ticket) = self
-            .shared_channels
-            .subscribe(message_type, account, || self.write_message(&message))
-            .await?;
+        let (receiver, ticket) = self.shared_channels.subscribe(message_type, account, || self.write_now(&message)).await?;
 
         Ok(AsyncInternalSubscription::with_cleanup(receiver, self.cleanup_sender.clone())
             .shared(ticket)
@@ -1086,10 +1110,15 @@ impl<S: AsyncStream> AsyncMessageBus for AsyncTcpMessageBus<S> {
     }
 
     async fn cancel_shared_subscription(&self, ticket: SharedTicket, message: Option<Vec<u8>>) -> Result<(), Error> {
+        // Throttled before the lock: some cancels (account updates) are
+        // requests with an off flag and do wait.
+        if let Some(message) = &message {
+            self.throttle(message).await;
+        }
         self.shared_channels
             .unsubscribe(ticket, || async move {
                 match message {
-                    Some(message) => self.write_message(&message).await,
+                    Some(message) => self.write_now(&message).await,
                     None => Ok(()),
                 }
             })

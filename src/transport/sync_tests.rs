@@ -3591,3 +3591,65 @@ fn test_order_update_stream_survives_a_poisoned_lock() -> Result<(), Error> {
     assert!(lock_slot(&bus.order_update_stream).is_none(), "poisoned slot not cleared");
     Ok(())
 }
+
+// ---- outbound rate limiter (#950) ----
+
+fn rate_limited_bus(limiter: &crate::RateLimiter) -> (MemoryStream, Arc<TcpMessageBus<MemoryStream>>) {
+    let (stream, bus) = make_bus();
+    bus.set_rate_limiter(limiter.clone());
+    (stream, bus)
+}
+
+#[test]
+fn test_rate_limiter_reserves_a_slot_per_send() -> Result<(), Error> {
+    let limiter = crate::RateLimiter::per_second(1000);
+    let (_stream, bus) = rate_limited_bus(&limiter);
+
+    let mut reserved = Vec::new();
+    for id in 1..=3 {
+        let _subscription = bus.send_request(RequestId::nth(id), b"request")?;
+        reserved.push(limiter.reserved_until().expect("send did not reserve"));
+    }
+    assert!(reserved[0] < reserved[1] && reserved[1] < reserved[2], "{reserved:?}");
+    Ok(())
+}
+
+#[test]
+fn test_rate_limited_cancel_is_written_without_waiting() -> Result<(), Error> {
+    // per_second(1): the first send spends the budget for a whole second.
+    let limiter = crate::RateLimiter::per_second(1);
+    let (stream, bus) = rate_limited_bus(&limiter);
+    bus.send_message(b"request")?;
+
+    let cancel = crate::messages::encode_protobuf_message(OutgoingMessages::CancelMarketData as i32, b"");
+    let started = Instant::now();
+    bus.send_message(&cancel)?;
+    assert!(started.elapsed() < Duration::from_millis(200), "cancel waited {:?}", started.elapsed());
+    assert_eq!(count_frames(&stream.captured(), &cancel), 1);
+    Ok(())
+}
+
+/// A shared subscribe throttles before taking the `counts` lock, so a shared
+/// cancel on another thread is not held up behind its wait.
+#[test]
+fn test_throttled_shared_subscribe_does_not_hold_up_shared_cancel() -> Result<(), Error> {
+    // Burst of 1, then one every 500 ms.
+    let limiter = crate::RateLimiter::per_second(2);
+    let (stream, bus) = rate_limited_bus(&limiter);
+    let positions = positions_subscription(&bus)?;
+
+    let waiting = {
+        let bus = bus.clone();
+        thread::spawn(move || bus.send_shared_request(OutgoingMessages::RequestOpenOrders, b"open-orders").map(drop))
+    };
+    thread::sleep(Duration::from_millis(50)); // let it reach the limiter
+
+    let started = Instant::now();
+    drop(positions);
+    assert!(started.elapsed() < Duration::from_millis(200), "cancel waited {:?}", started.elapsed());
+    assert_eq!(count_frames(&stream.captured(), &positions_cancel()), 1);
+
+    waiting.join().unwrap()?;
+    assert_eq!(count_frames(&stream.captured(), b"open-orders"), 1);
+    Ok(())
+}

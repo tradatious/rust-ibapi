@@ -28,6 +28,8 @@ pub mod sync;
 #[cfg(feature = "async")]
 pub mod r#async;
 
+pub(crate) mod rate_limiter;
+
 // Internal channel envelope shared across sync/async transports.
 #[cfg(any(feature = "sync", feature = "async"))]
 pub(crate) use crate::subscriptions::common::RoutedItem;
