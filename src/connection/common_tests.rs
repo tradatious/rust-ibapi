@@ -3,7 +3,7 @@ use crate::common::test_utils::helpers;
 use crate::common::test_utils::helpers::assert_rejects_text_framing;
 use crate::common::test_utils::helpers::{binary_text, proto_error_response, proto_response, CapturingSink};
 use crate::messages::IncomingMessages;
-use crate::messages::{HANDSHAKE_DECODE_FAILURE_CODE, HANDSHAKE_UNKNOWN_FRAME_CODE, UNKNOWN_MESSAGE_TYPE_CODE};
+use crate::messages::{HANDSHAKE_DECODE_FAILURE_CODE, HANDSHAKE_UNKNOWN_FRAME_CODE, MESSAGE_ID_LEN, UNKNOWN_MESSAGE_TYPE_CODE};
 use std::sync::{Arc, Mutex};
 use time::macros::datetime;
 use time_tz::TimeZone;

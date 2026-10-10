@@ -9,8 +9,8 @@ use crate::accounts::AccountUpdate;
 use crate::common::timezone::{find_timezone, resolve_local};
 use crate::errors::Error;
 use crate::messages::{
-    encode_length, encode_protobuf_message, unknown_message_type_notice, IncomingMessages, Notice, OutgoingMessages, ResponseMessage,
-    HANDSHAKE_DECODE_FAILURE_CODE, HANDSHAKE_UNKNOWN_FRAME_CODE, MESSAGE_ID_LEN, PROTOBUF_MSG_ID,
+    encode_length, encode_protobuf_message, split_message_id, unknown_message_type_notice, IncomingMessages, Notice, OutgoingMessages,
+    ResponseMessage, HANDSHAKE_DECODE_FAILURE_CODE, HANDSHAKE_UNKNOWN_FRAME_CODE, PROTOBUF_MSG_ID,
 };
 use crate::orders::{CommissionReport, ExecutionData, OrderData, OrderStatus};
 use crate::server_versions;
@@ -365,13 +365,12 @@ pub fn parse_connection_time(connection_time: &str) -> (Option<OffsetDateTime>, 
 /// stream fixtures, which supply bodies directly and skip the length prefix
 /// entirely. It used to index straight past the end and panic the dispatcher.
 pub fn parse_raw_message(data: &[u8]) -> Result<ResponseMessage, Error> {
-    let Some((header, payload)) = data.split_first_chunk::<MESSAGE_ID_LEN>() else {
+    let Some((msg_id, payload)) = split_message_id(data) else {
         return Err(Error::InvalidFrame(format!(
             "frame body of {} bytes cannot hold a message id",
             data.len()
         )));
     };
-    let msg_id = i32::from_be_bytes(*header);
 
     if msg_id > PROTOBUF_MSG_ID {
         let real_type = msg_id - PROTOBUF_MSG_ID;

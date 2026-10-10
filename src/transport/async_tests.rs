@@ -2328,3 +2328,40 @@ async fn test_drain_reports_shutdown() {
     let outcome: Result<Drained, Error> = drain.await.unwrap();
     assert!(matches!(outcome, Err(Error::Shutdown)), "got {outcome:?}");
 }
+
+// ---- outbound rate limiter (#950) ----
+
+/// A throttled send awaits rather than blocking the runtime: on a paused
+/// clock, a ticker task keeps running while the sends wait out the limit.
+#[tokio::test(start_paused = true)]
+async fn test_rate_limiter_awaits_without_blocking_runtime() -> Result<(), Error> {
+    let (stream, bus) = make_bus();
+    // Burst of 1, then one every 500 ms.
+    bus.set_rate_limiter(crate::RateLimiter::per_second(2));
+
+    let ticks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ticker = {
+        let ticks = ticks.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                ticks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            }
+        })
+    };
+
+    let started = std::time::Instant::now();
+    for _ in 0..4 {
+        bus.send_message(b"request".to_vec()).await?;
+    }
+    ticker.abort();
+
+    assert_eq!(count_frames(&stream.captured(), b"request"), 4);
+    assert!(ticks.load(std::sync::atomic::Ordering::Relaxed) > 0, "runtime blocked while throttled");
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "slept in real time: {:?}",
+        started.elapsed()
+    );
+    Ok(())
+}

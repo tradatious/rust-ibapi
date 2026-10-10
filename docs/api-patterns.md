@@ -607,24 +607,21 @@ let handles: Vec<_> = contracts
 ```
 
 ### Rate Limiting
+Install a `RateLimiter` on the client instead of pacing requests by hand. Pass
+clones of one limiter to every client on the same gateway; see the
+`RateLimiter` docs for what is counted, how cancels are treated and the
+default.
 ```rust
-use std::time::{Duration, Instant};
+use ibapi::{Client, RateLimiter};
 
-struct RateLimiter {
-    last_request: Instant,
-    min_interval: Duration,
-}
-
-impl RateLimiter {
-    fn wait_if_needed(&mut self) {
-        let elapsed = self.last_request.elapsed();
-        if elapsed < self.min_interval {
-            thread::sleep(self.min_interval - elapsed);
-        }
-        self.last_request = Instant::now();
-    }
-}
+let client = Client::builder()
+    .address("127.0.0.1:4002")
+    .client_id(100)
+    .rate_limiter(RateLimiter::default())
+    .connect()
+    .await?;
 ```
+Historical-data pacing (error 162) is a separate limit the library does not enforce.
 
 ### Reconnection Handling
 ```rust
