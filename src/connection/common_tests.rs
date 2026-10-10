@@ -392,6 +392,14 @@ fn test_parse_connection_time_china_standard_time() {
 }
 
 #[test]
+fn test_parse_connection_time_brasilia_standard_time() {
+    // As sent by a pt-BR 10.51 gateway (#964). Brazil has no DST since 2019.
+    let (connection_time, timezone) = parse_connection_time("20261009 10:00:00 Brasilia Standard Time");
+    assert_eq!(connection_time, Some(datetime!(2026-10-09 10:00:00 -03:00)));
+    assert_eq!(timezone.map(|tz| tz.name()), Some("America/Sao_Paulo"));
+}
+
+#[test]
 fn test_parse_connection_time_chinese_utf8() {
     let example = "20230405 22:20:39 中国标准时间";
     let (connection_time, timezone) = parse_connection_time(example);

@@ -73,7 +73,7 @@ pub enum Error {
     ConnectionRejected(String),
 
     /// IB Gateway sent a timezone name that could not be mapped to an IANA zone.
-    #[error("unrecognized IB Gateway timezone {0:?}; register a mapping with `ibapi::register_timezone_alias({0:?}, \"<IANA-name>\")` before connecting, or set `IBAPI_TIMEZONE_ALIASES={0}=<IANA-name>` in the environment. To request it as a built-in, file an issue at https://github.com/wboayue/rust-ibapi/issues")]
+    #[error("unrecognized IB Gateway timezone {0:?}; register a mapping with `ibapi::register_timezone_alias({0:?}, \"<IANA-name>\")` before connecting, or set `IBAPI_TIMEZONE_ALIASES={0}=<IANA-name>` in the environment. See https://github.com/wboayue/rust-ibapi/blob/main/docs/troubleshooting.md#gateway-time-zone. To request it as a built-in, file an issue at https://github.com/wboayue/rust-ibapi/issues")]
     UnsupportedTimeZone(String),
 
     /// Connection was reset by TWS/Gateway.

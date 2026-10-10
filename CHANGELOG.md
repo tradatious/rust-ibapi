@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `OptionChainBuilder::request_id()` and `OptionChainBuilder::buffer_limit(n)`, as on `ContractDetailsBuilder`. The id is allocated when the builder is made, so it is known before anything is sent; `subscribe()` sends once (no retry). TWS has no cancel for this request (#902).
 - `HistoricalDataBuilder::buffer_limit(n)` caps unread items on `stream()`, as on `ContractDetailsBuilder`. The stream has no end marker (`HistoricalBarUpdate::End` after the initial bars is an item and counts), so a reader that stops reading always overflows eventually. `fetch()` returns `InvalidArgument` when it is set (#902).
 - `subscriptions::MAX_BUFFER_LIMIT`, the largest `buffer_limit` for every builder (#902).
+- Built-in time zone aliases `BRT` and `Brasilia Standard Time` (`America/Sao_Paulo`), sent by pt-BR IB Gateway builds 10.45 and 10.51. `E. South America Standard Time` already resolved. The troubleshooting guide now documents where the gateway time zone is used (#964).
 
 ### Deprecated
 
