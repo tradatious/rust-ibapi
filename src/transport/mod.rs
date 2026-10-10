@@ -38,9 +38,10 @@ pub(crate) use crate::subscriptions::common::RoutedItem;
 pub(crate) struct BufferBound {
     /// The most unread items the route queues.
     pub limit: usize,
-    /// The request's end marker. It always gets through, like an error, so a
-    /// result that fills the cap exactly still ends normally.
-    pub end: crate::messages::IncomingMessages,
+    /// The request's end markers. They always get through, like an error, so
+    /// a result that fills the cap exactly still ends normally. Empty: only an
+    /// error ends the stream.
+    pub end: &'static [crate::messages::IncomingMessages],
 }
 
 /// The largest `buffer_limit`. The async client allocates its channel's slots
@@ -61,8 +62,7 @@ impl BufferBound {
                 "buffer_limit must be 1..={MAX_BUFFER_LIMIT}, got {limit}"
             )));
         }
-        let end = T::END_MESSAGE.expect("buffer_limit needs a stream with an end marker");
-        Ok(Some(Self { limit, end }))
+        Ok(Some(Self { limit, end: T::END_MESSAGES }))
     }
 }
 
@@ -109,7 +109,7 @@ impl BoundState {
         }
         let terminal = match item {
             RoutedItem::Error(_) => true,
-            RoutedItem::Response(message) => message.message_type() == self.bound.end,
+            RoutedItem::Response(message) => self.bound.end.contains(&message.message_type()),
             RoutedItem::Notice(_) => false,
         };
         if terminal {

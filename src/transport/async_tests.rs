@@ -2148,7 +2148,7 @@ async fn order_binding_reaches_updates_without_using_raw_order_id() {
 pub(super) fn bound(limit: usize) -> BufferBound {
     BufferBound {
         limit,
-        end: IncomingMessages::ContractDataEnd,
+        end: &[IncomingMessages::ContractDataEnd],
     }
 }
 
