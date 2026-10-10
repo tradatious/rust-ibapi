@@ -88,6 +88,7 @@ fn unsupported_timezone_display_contains_alias_and_helpers() {
     assert!(rendered.contains("US/Foo"));
     assert!(rendered.contains("register_timezone_alias"));
     assert!(rendered.contains("IBAPI_TIMEZONE_ALIASES"));
+    assert!(rendered.contains("troubleshooting.md#gateway-time-zone"));
 }
 
 #[test]

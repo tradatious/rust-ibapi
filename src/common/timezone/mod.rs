@@ -74,9 +74,7 @@ static TIMEZONE_REGISTRY: LazyLock<Mutex<HashMap<String, String>>> = LazyLock::n
 /// `IBAPI_TIMEZONE_ALIASES=name=iana;name=iana` environment variable, which
 /// seeds the registry on first lookup.
 ///
-/// A mapping applies wherever the crate resolves a gateway zone name:
-/// `Client::time_zone` and `Client::connection_time`, and the timestamps of
-/// `HistoricalDataEnd` and `HistoricalSchedule`. See
+/// A mapping applies wherever the crate resolves a gateway zone name; see
 /// [Gateway Time Zone](https://github.com/wboayue/rust-ibapi/blob/main/docs/troubleshooting.md#gateway-time-zone).
 ///
 /// # Example

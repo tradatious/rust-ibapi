@@ -66,6 +66,10 @@ Error: Connection timeout
 3. Ensure correct IP address (usually 127.0.0.1 for local)
 4. Try increasing connection timeout in code
 
+## Time Zones
+
+<!-- Anchor #gateway-time-zone is linked from Client::time_zone (sync + async),
+register_timezone_alias and Error::UnsupportedTimeZone; keep the heading. -->
 ### Gateway Time Zone
 
 IB Gateway reports times as a wall-clock reading plus a zone name, such as
@@ -96,22 +100,17 @@ UTC format makes `HistoricalDataEnd` timestamps zone-less, so they need no looku
 A reading in a daylight-saving fold (clocks went back) takes the earlier
 offset; one in a gap (clocks went forward) is pushed forward by the gap.
 
-#### Unrecognized Time Zone
+### Unrecognized Time Zone
 
-**Symptom:** `client.time_zone()` and `client.connection_time()` return `None`,
-and the connect logs a warning (historical-data decoding fails with the same
-text as `Error::UnsupportedTimeZone`):
+**Symptom:** one of the outcomes in the table above, with this text in the
+connect warning or the error:
 ```
 unrecognized IB Gateway timezone "Some Standard Time"; register a mapping with
 `ibapi::register_timezone_alias("Some Standard Time", "<IANA-name>")` ...
 ```
 
-Names are matched exactly; a partial or unknown name is never guessed at.
-IB Gateway sends a free-form timezone string from the host machine's OS locale.
-On non-English Windows installations the string may be a Windows TZ name we
-don't recognize, mojibake from a non-UTF-8 locale, or any other label produced
-by the gateway's environment. The crate ships with a built-in mapping table,
-but you can extend it at runtime without rebuilding.
+On non-English Windows the name may be a locale-specific label or mojibake.
+Extend the alias table at runtime without rebuilding:
 
 **Option 1 — programmatic (one mapping at a time):**
 ```rust
