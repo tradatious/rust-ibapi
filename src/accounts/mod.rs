@@ -146,7 +146,7 @@ impl AccountSummaryTags {
 pub enum AccountSummaryResult {
     /// Summary of account details such as net liquidation, cash balance, etc.
     ///
-    /// After [`End`](Self::End), TWS keeps sending rows on the same subscription when values change.
+    /// After [`End`](Self::End), TWS keeps sending rows on the same subscription.
     Summary(AccountSummary),
     /// End marker for the initial snapshot of account summaries.
     ///
@@ -158,15 +158,46 @@ pub enum AccountSummaryResult {
 
 /// The latest account summary values, keyed by account, tag and currency.
 ///
-/// Built from the rows of an account summary subscription. After the initial snapshot TWS pushes
-/// only the values that changed, so each snapshot holds the most recent value of every row seen
-/// so far, not just the latest batch.
+/// Built from the rows of an account summary subscription with [`apply`](Self::apply). A push after
+/// the initial snapshot need not resend every row, so each snapshot holds the most recent value of
+/// every row seen so far, not just the latest batch.
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct AccountSummarySnapshot {
     rows: BTreeMap<(String, String, String), AccountSummary>,
 }
 
 impl AccountSummarySnapshot {
+    /// Stores a row as the latest value for its account, tag and currency.
+    ///
+    /// Returns `true` when the row was new or changed a value, `false` when it repeated the stored
+    /// row. Use it to fold an [`account_summary`](crate::Client::account_summary) subscription
+    /// yourself, e.g. with your own batching.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use ibapi::accounts::{AccountSummary, AccountSummarySnapshot};
+    ///
+    /// let mut snapshot = AccountSummarySnapshot::default();
+    /// let row = AccountSummary {
+    ///     account: "DU1234567".to_string(),
+    ///     tag: "NetLiquidation".to_string(),
+    ///     value: "100.0".to_string(),
+    ///     currency: "USD".to_string(),
+    /// };
+    ///
+    /// assert!(snapshot.apply(row.clone()));
+    /// assert!(!snapshot.apply(row));
+    /// ```
+    pub fn apply(&mut self, summary: AccountSummary) -> bool {
+        let key = (summary.account.clone(), summary.tag.clone(), summary.currency.clone());
+        if self.rows.get(&key) == Some(&summary) {
+            return false;
+        }
+        self.rows.insert(key, summary);
+        true
+    }
+
     /// Returns the latest row for an account, tag and currency.
     ///
     /// # Examples

@@ -181,7 +181,8 @@ use crossbeam::channel;
 use std::time::Duration;
 
 /// Test decoder for the collect tests: the value `-1` marks a snapshot-end
-/// sentinel (mirrors `TickTypes::SnapshotEnd`).
+/// sentinel (mirrors `TickTypes::SnapshotEnd`), `0` a batch end (mirrors
+/// `AccountSummaryResult::End`).
 #[derive(Debug, PartialEq)]
 struct CollectItem(i32);
 
@@ -194,6 +195,10 @@ impl StreamDecoder<CollectItem> for CollectItem {
 
     fn is_snapshot_end(&self) -> bool {
         self.0 == -1
+    }
+
+    fn is_batch_end(&self) -> bool {
+        self.0 == 0
     }
 }
 
@@ -566,6 +571,62 @@ fn test_collect_to_end_within_closed_channel_is_unexpected_end() {
         Err(Error::UnexpectedEndOfStream)
     ));
     assert!(started.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn test_next_batch_closes_after_quiet_period() {
+    let (sub, _keep) = collect_subscription(vec![data(10), data(20)], true);
+
+    assert_eq!(
+        sub.next_batch(Duration::from_millis(50)).unwrap().unwrap(),
+        vec![CollectItem(10), CollectItem(20)]
+    );
+}
+
+#[test]
+fn test_next_batch_closes_at_batch_end_with_marker_last() {
+    // A 30s quiet period would take in 30 if the marker didn't close the batch.
+    let (sub, _keep) = collect_subscription(vec![data(10), data(0), data(30)], true);
+
+    assert_eq!(
+        sub.next_batch(Duration::from_secs(30)).unwrap().unwrap(),
+        vec![CollectItem(10), CollectItem(0)]
+    );
+}
+
+#[test]
+fn test_next_batch_waits_for_first_item() {
+    let (sub, keep) = collect_subscription(vec![], true);
+    let sender = keep.unwrap();
+    let start = std::time::Instant::now();
+    let late = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        sender.send(data(10)).unwrap();
+        sender
+    });
+
+    let batch = sub.next_batch(Duration::from_millis(50)).unwrap().unwrap();
+    let _sender = late.join().unwrap();
+
+    assert_eq!(batch, vec![CollectItem(10)]);
+    assert!(start.elapsed() >= Duration::from_millis(150));
+}
+
+#[test]
+fn test_next_batch_at_stream_end() {
+    let (sub, _keep) = collect_subscription(vec![data(10)], false);
+    assert_eq!(sub.next_batch(Duration::from_secs(30)).unwrap().unwrap(), vec![CollectItem(10)]);
+    assert!(sub.next_batch(Duration::from_secs(30)).is_none());
+
+    let (empty, _keep) = collect_subscription(vec![], false);
+    assert!(empty.next_batch(Duration::from_secs(30)).is_none());
+}
+
+#[test]
+fn test_next_batch_returns_terminal_error() {
+    let (sub, _keep) = collect_subscription(vec![data(10), RoutedItem::Error(Error::ConnectionReset)], true);
+
+    assert!(matches!(sub.next_batch(Duration::from_secs(30)), Some(Err(Error::ConnectionReset))));
 }
 
 #[test]

@@ -9,7 +9,6 @@ use crate::client::blocking::{ClientRequestBuilders, Subscription};
 use crate::common::request_helpers::{self, empty_on_end_of_stream, expect_proto};
 use crate::messages::OutgoingMessages;
 use crate::protocol::{check_version, Features};
-use crate::subscriptions::SubscriptionItem;
 use crate::{client::sync::Client, Error};
 
 use super::common::snapshots::SnapshotBuilder;
@@ -177,8 +176,9 @@ impl Client {
     /// # Subscription lifetime
     ///
     /// The subscription stays open until it is dropped or cancelled. TWS first sends the requested
-    /// tags followed by [`AccountSummaryResult::End`], then pushes changed values as further
-    /// [`AccountSummaryResult::Summary`] rows without another `End`. Dropping the subscription cancels
+    /// tags followed by [`AccountSummaryResult::End`], then keeps pushing
+    /// [`AccountSummaryResult::Summary`] rows without another `End`: when values change, and
+    /// periodically, when a push can resend rows whose values did not change. Dropping the subscription cancels
     /// the request.
     ///
     /// # Arguments
@@ -212,13 +212,16 @@ impl Client {
     /// Wraps [`account_summary`](Self::account_summary) and keeps the latest value of every row, so
     /// each [`AccountSummarySnapshot`] holds the whole account rather than only the rows TWS pushed
     /// last. TWS sends one `End` marker after the initial snapshot and none after the rows it pushes
-    /// later, so a snapshot is emitted at an `End` and once no row has arrived for `quiet`. IB
-    /// documents the pushes as every three minutes for the values that changed. A snapshot is
-    /// emitted only when a row changed a value since the previous one, except the first, which is
-    /// emitted at the first `End` even when empty. Choose `quiet` longer than the gap between the
-    /// rows of one push, which arrive within milliseconds of each other.
+    /// later, so the first snapshot is emitted at the first `End`, even when empty, and each later
+    /// one once no row has arrived for `quiet`. Pushes arrive when values change and periodically
+    /// (IB documents every three minutes), and a push can resend unchanged rows. A later snapshot is
+    /// emitted only when a row changed a value since the previous one. Choose `quiet` longer than
+    /// the gap between the rows of one push, which arrive within milliseconds of each other.
     ///
-    /// Notices that arrive on the subscription are dropped.
+    /// To fold the rows with your own batching instead, use [`AccountSummarySnapshot::apply`].
+    ///
+    /// Notices that arrive on the subscription are logged at `warn!`. For other streams that dump
+    /// then push, batch with [`Subscription::next_batch`](crate::subscriptions::Subscription::next_batch).
     ///
     /// Dropping the returned iterator cancels the subscription.
     ///
@@ -573,6 +576,14 @@ impl std::fmt::Debug for AccountSummarySnapshots {
     }
 }
 
+impl AccountSummarySnapshots {
+    /// Cancels the underlying subscription. Iteration then ends, after a final snapshot of any rows
+    /// not yet emitted.
+    pub fn cancel(&self) {
+        self.subscription.cancel();
+    }
+}
+
 impl Iterator for AccountSummarySnapshots {
     type Item = Result<AccountSummarySnapshot, Error>;
 
@@ -582,27 +593,14 @@ impl Iterator for AccountSummarySnapshots {
     /// received before the subscription ends are returned as a final snapshot.
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            // `next_timeout` returns `None` for a timeout and for an ended subscription alike. Either
-            // way the pending rows are complete, and an ended subscription then returns `None` from
-            // the blocking `next` below.
-            let item = if self.builder.has_pending() {
-                match self.subscription.next_timeout(self.quiet) {
-                    Some(item) => Some(item),
-                    None => return Some(Ok(self.builder.take())),
-                }
-            } else {
-                self.subscription.next()
-            };
-
-            match item {
-                Some(Ok(SubscriptionItem::Data(result))) => {
-                    if self.builder.apply(result) {
-                        return Some(Ok(self.builder.take()));
+            match self.subscription.next_batch(self.quiet) {
+                Some(Ok(batch)) => {
+                    if let Some(snapshot) = self.builder.fold(batch) {
+                        return Some(Ok(snapshot));
                     }
                 }
-                Some(Ok(SubscriptionItem::Notice(_))) => {}
                 Some(Err(e)) => return Some(Err(e)),
-                None => return None,
+                None => return self.builder.flush().map(Ok),
             }
         }
     }
