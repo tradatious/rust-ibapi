@@ -1,6 +1,7 @@
 //! Folds account summary batches into snapshots, shared by the sync and async clients.
 
 use super::super::{AccountSummaryResult, AccountSummarySnapshot};
+use crate::subscriptions::StreamDecoder;
 
 /// Accumulates batches into a snapshot and decides when one is complete.
 #[derive(Debug, Default)]
@@ -16,7 +17,7 @@ impl SnapshotBuilder {
     /// when empty, so a slow initial dump split by the quiet period is held until its `End`; each
     /// later one at any batch that changed a value.
     pub(in crate::accounts) fn fold(&mut self, batch: Vec<AccountSummaryResult>) -> Option<AccountSummarySnapshot> {
-        let ended = matches!(batch.last(), Some(AccountSummaryResult::End));
+        let ended = batch.last().is_some_and(StreamDecoder::is_batch_end);
         for result in batch {
             if let AccountSummaryResult::Summary(summary) = result {
                 self.pending |= self.snapshot.apply(summary);

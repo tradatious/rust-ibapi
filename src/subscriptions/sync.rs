@@ -520,9 +520,13 @@ impl<T: StreamDecoder<T>> Subscription<T> {
     ///
     /// For streams that send an initial dump ending in an end marker, then push
     /// updates without one: account summary, account updates, positions and
-    /// their multi variants. The initial dump closes at its end marker; each
-    /// later push closes once `quiet` passes without a row. Choose `quiet`
-    /// longer than the gap between the rows of one push.
+    /// their multi variants. Each push closes once `quiet` passes without a
+    /// row; choose `quiet` longer than the gap between the rows of one push. A
+    /// gap longer than `quiet` inside the initial dump splits it: the batch
+    /// ending in the marker completes it, so check `batch.last()`.
+    ///
+    /// On a stream that never pauses for `quiet`, such as market data, a batch
+    /// never closes.
     ///
     /// Blocks without a time limit until the first item arrives.
     ///
