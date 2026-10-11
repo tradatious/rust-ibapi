@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Client::account_summary_snapshots(&group, tags, quiet)` (async and blocking) wraps `account_summary` and yields `AccountSummarySnapshot`, the latest value of every row by account, tag and currency. TWS sends one `End` after the first snapshot and none after the rows it pushes later, so a snapshot completes at an `End` or once no row has arrived for `quiet`, and only when a row changed a value. The blocking type is at `client::blocking::AccountSummarySnapshots` when both features are enabled (#957).
+- `AccountSummary` implements `Clone` and `PartialEq` (#957).
 - `generic_tick::ETF_FROZEN_NAV_LAST` (`"623"`, frozen-data ETF NAV last price, tick 97) (#946).
 - `OptionChainBuilder::request_id()` and `OptionChainBuilder::buffer_limit(n)`, as on `ContractDetailsBuilder`. The id is allocated when the builder is made, so it is known before anything is sent; `subscribe()` sends once (no retry). TWS has no cancel for this request (#902).
 - `HistoricalDataBuilder::buffer_limit(n)` caps unread items on `stream()`, as on `ContractDetailsBuilder`. The stream has no end marker (`HistoricalBarUpdate::End` after the initial bars is an item and counts), so a reader that stops reading always overflows eventually. `fetch()` returns `InvalidArgument` when it is set (#902).
