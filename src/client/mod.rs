@@ -35,10 +35,9 @@ pub mod r#async;
 
 /// Blocking client bindings for synchronous workflows.
 ///
-/// Also the path for the blocking versions of types whose top-level name
-/// (`ibapi::market_data::historical::TickSubscription`,
-/// `ibapi::display_groups::DisplayGroupSubscription`) is the async type when
-/// both the `sync` and `async` features are enabled.
+/// Also the path for the blocking versions of dual-feature types (subscriptions
+/// and their iterators) whose top-level name is the async type when both the
+/// `sync` and `async` features are enabled.
 ///
 /// # Examples
 ///
@@ -47,18 +46,21 @@ pub mod r#async;
 /// use ibapi::contracts::Contract;
 /// use ibapi::market_data::historical::TickLast;
 ///
-/// let client = Client::connect("127.0.0.1:4002", 100).expect("connection failed");
+/// # fn main() -> Result<(), ibapi::Error> {
+/// let client = Client::connect("127.0.0.1:4002", 100)?;
 /// let contract = Contract::stock("TSLA").build();
 ///
-/// let ticks: TickSubscription<TickLast> = client.historical_ticks(&contract, 100).trade().expect("historical ticks request failed");
+/// let ticks: TickSubscription<TickLast> = client.historical_ticks(&contract, 100).trade()?;
 /// for tick in ticks.iter_data() {
-///     println!("{:?}", tick.expect("decode error"));
+///     println!("{:?}", tick?);
 /// }
 ///
-/// let group: DisplayGroupSubscription = client.subscribe_to_group_events(1).expect("subscription failed");
+/// let group: DisplayGroupSubscription = client.subscribe_to_group_events(1)?;
 /// for update in group.iter_data() {
-///     println!("{:?}", update.expect("decode error"));
+///     println!("{:?}", update?);
 /// }
+/// # Ok(())
+/// # }
 /// ```
 #[cfg(feature = "sync")]
 pub mod blocking {
