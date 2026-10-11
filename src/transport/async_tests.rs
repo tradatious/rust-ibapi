@@ -23,6 +23,7 @@ use crate::server_versions;
 use crate::testdata::builders::contracts::contract_data;
 use crate::testdata::builders::orders::order_bound;
 use crate::testdata::builders::ResponseProtoEncoder;
+use crate::transport::common::poison_with;
 
 /// Wrap a fresh `MemoryStream` in a stubbed `AsyncTcpMessageBus`. Pins
 /// `server_version` to the current floor so `parse_raw_message` produces
@@ -2438,4 +2439,20 @@ async fn test_abandoned_order_status_wait_is_released() {
     drain_cleanup_signals(&bus).await;
 
     assert!(!bus.order_taps.has_status_entry(OrderId::from(7)), "status stream outlived its wait");
+}
+
+/// A panic under the broadcaster lock must not end notice delivery or panic
+/// every later broadcast on the dispatcher task.
+#[tokio::test]
+async fn notice_broadcaster_recovers_from_a_poisoned_lock() {
+    let broadcaster = NoticeBroadcaster::new(broadcast::channel(4).0);
+    poison_with(|| broadcaster.sender.lock().unwrap());
+    assert!(broadcaster.sender.is_poisoned());
+
+    let mut receiver = broadcaster.subscribe();
+    broadcaster.broadcast(Notice::synthesized(1, "after poison".into()));
+    broadcaster.close();
+
+    assert_eq!(receiver.recv().await.unwrap().message, "after poison");
+    assert!(matches!(receiver.recv().await, Err(broadcast::error::RecvError::Closed)));
 }

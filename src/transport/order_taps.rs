@@ -6,11 +6,11 @@
 //! both, so each bus has one field to publish to, reset, and close.
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Mutex, MutexGuard};
 
 use log::warn;
 
-use super::common::{Lease, LeaseRef};
+use super::common::{lock, Lease, LeaseRef};
 use crate::client::ids::OrderId;
 use crate::messages::{IncomingMessages, ResponseMessage};
 use crate::transport::RoutedItem;
@@ -149,7 +149,7 @@ impl<S> Default for OrderTaps<S> {
 impl<S: TapSender> OrderTaps<S> {
     /// Lock the state, recovering from poisoning: every update leaves it whole.
     fn lock(&self) -> MutexGuard<'_, State<S>> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        lock(&self.state)
     }
 
     /// Open the order-update stream. Refused with [`Error::AlreadySubscribed`]
@@ -315,14 +315,7 @@ impl<S: TapSender> OrderTaps<S> {
     /// Poison the state lock, as a panic while holding it would.
     #[cfg(feature = "sync")]
     pub(crate) fn poison(&self) {
-        std::thread::scope(|scope| {
-            let _ = scope
-                .spawn(|| {
-                    let _guard = self.state.lock().unwrap();
-                    panic!("poison the order taps");
-                })
-                .join();
-        });
+        super::common::poison_with(|| self.state.lock().unwrap());
         assert!(self.state.is_poisoned());
     }
 }
