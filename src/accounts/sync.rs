@@ -9,7 +9,6 @@ use crate::client::blocking::{ClientRequestBuilders, Subscription};
 use crate::common::request_helpers::{self, empty_on_end_of_stream, expect_proto};
 use crate::messages::OutgoingMessages;
 use crate::protocol::{check_version, Features};
-use crate::subscriptions::SubscriptionItem;
 use crate::{client::sync::Client, Error};
 
 use super::common::snapshots::SnapshotBuilder;
@@ -221,7 +220,8 @@ impl Client {
     ///
     /// To fold the rows with your own batching instead, use [`AccountSummarySnapshot::apply`].
     ///
-    /// Notices that arrive on the subscription are dropped.
+    /// Notices that arrive on the subscription are logged at `warn!`. For other streams that dump
+    /// then push, batch with [`Subscription::next_batch`](crate::subscriptions::Subscription::next_batch).
     ///
     /// Dropping the returned iterator cancels the subscription.
     ///
@@ -593,27 +593,14 @@ impl Iterator for AccountSummarySnapshots {
     /// received before the subscription ends are returned as a final snapshot.
     fn next(&mut self) -> Option<Self::Item> {
         loop {
-            // `next_timeout` returns `None` for a timeout and for an ended subscription alike. Either
-            // way the pending rows are complete, and an ended subscription then returns `None` from
-            // the blocking `next` below.
-            let item = if self.builder.quiet_armed() {
-                match self.subscription.next_timeout(self.quiet) {
-                    Some(item) => Some(item),
-                    None => return Some(Ok(self.builder.take())),
-                }
-            } else {
-                self.subscription.next()
-            };
-
-            match item {
-                Some(Ok(SubscriptionItem::Data(result))) => {
-                    if self.builder.apply(result) {
-                        return Some(Ok(self.builder.take()));
+            match self.subscription.next_batch(self.quiet) {
+                Some(Ok(batch)) => {
+                    if let Some(snapshot) = self.builder.fold(batch) {
+                        return Some(Ok(snapshot));
                     }
                 }
-                Some(Ok(SubscriptionItem::Notice(_))) => {}
                 Some(Err(e)) => return Some(Err(e)),
-                None => return self.builder.has_pending().then(|| Ok(self.builder.take())),
+                None => return self.builder.flush().map(Ok),
             }
         }
     }

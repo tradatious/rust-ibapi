@@ -2,14 +2,13 @@
 
 use std::time::Duration;
 
-use futures::StreamExt;
 use time::OffsetDateTime;
 
 use crate::client::ClientRequestBuilders;
 use crate::common::request_helpers::{self, empty_on_end_of_stream, expect_proto};
 use crate::messages::OutgoingMessages;
 use crate::protocol::{check_version, Features};
-use crate::subscriptions::{Subscription, SubscriptionItem};
+use crate::subscriptions::Subscription;
 use crate::{Client, Error};
 
 use super::common::snapshots::SnapshotBuilder;
@@ -249,7 +248,8 @@ impl Client {
     ///
     /// To fold the rows with your own batching instead, use [`AccountSummarySnapshot::apply`].
     ///
-    /// Notices that arrive on the subscription are dropped.
+    /// Notices that arrive on the subscription are logged at `warn!`. For other streams that dump
+    /// then push, batch with [`Subscription::next_batch`](crate::subscriptions::Subscription::next_batch).
     ///
     /// Dropping the returned stream cancels the subscription in a background task. Call
     /// [`cancel`](AccountSummarySnapshots::cancel) before resubscribing: TWS allows two account
@@ -697,26 +697,19 @@ impl AccountSummarySnapshots {
     ///
     /// A snapshot completes at an `End` marker or after the `quiet` period without a row. Rows
     /// received before the subscription ends are returned as a final snapshot.
+    ///
+    /// Not cancel-safe: dropping the future, as `tokio::select!` does with the branches that lose,
+    /// drops the rows of a batch still being read.
     pub async fn next(&mut self) -> Option<Result<AccountSummarySnapshot, Error>> {
         loop {
-            let item = if self.builder.quiet_armed() {
-                match tokio::time::timeout(self.quiet, self.subscription.next()).await {
-                    Ok(item) => item,
-                    Err(_) => return Some(Ok(self.builder.take())),
-                }
-            } else {
-                self.subscription.next().await
-            };
-
-            match item {
-                Some(Ok(SubscriptionItem::Data(result))) => {
-                    if self.builder.apply(result) {
-                        return Some(Ok(self.builder.take()));
+            match self.subscription.next_batch(self.quiet).await {
+                Some(Ok(batch)) => {
+                    if let Some(snapshot) = self.builder.fold(batch) {
+                        return Some(Ok(snapshot));
                     }
                 }
-                Some(Ok(SubscriptionItem::Notice(_))) => {}
                 Some(Err(e)) => return Some(Err(e)),
-                None => return self.builder.has_pending().then(|| Ok(self.builder.take())),
+                None => return self.builder.flush().map(Ok),
             }
         }
     }

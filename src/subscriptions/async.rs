@@ -12,7 +12,7 @@ use futures::StreamExt;
 use log::{debug, warn};
 
 use super::common::{
-    collect_step, drain_outcome, filter_notice, is_undeclared, notice_item, CollectStop, DecoderContext, Drained, RoutedItem, SubscriptionItem,
+    collect_step, drain_outcome, filter_notice, is_undeclared, notice_item, Bound, CollectStop, DecoderContext, Drained, RoutedItem, SubscriptionItem,
 };
 use super::{log_cancel_error, StreamDecoder};
 use crate::transport::{AsyncInternalSubscription, AsyncMessageBus, SharedTicket};
@@ -253,7 +253,7 @@ impl<T: StreamDecoder<T> + Send + 'static> Subscription<T> {
     /// }
     /// ```
     pub async fn collect_until(&mut self, timeout: Duration, stop: impl FnMut(&[T]) -> bool) -> Vec<T> {
-        let (rows, stopped) = self.collect_core(Some(tokio::time::Instant::now() + timeout), stop).await;
+        let (rows, stopped) = self.collect_core(Bound::At(tokio::time::Instant::now() + timeout), stop).await;
         if let CollectStop::Error(e) = stopped {
             warn!("subscription error during collect: {e}");
         }
@@ -303,22 +303,76 @@ impl<T: StreamDecoder<T> + Send + 'static> Subscription<T> {
     /// }
     /// ```
     pub async fn collect_to_end_within(&mut self, timeout: Duration) -> Result<Vec<T>, Error> {
-        let (rows, stopped) = self.collect_core(Some(tokio::time::Instant::now() + timeout), |_| false).await;
+        let (rows, stopped) = self.collect_core(Bound::At(tokio::time::Instant::now() + timeout), |_| false).await;
         stopped.into_result(rows)
+    }
+
+    /// Returns the next batch of data items: those that arrive together, closed
+    /// by `quiet` without an item or by a batch-end marker.
+    ///
+    /// For streams that send an initial dump ending in an end marker, then push
+    /// updates without one: account summary, account updates, positions and
+    /// their multi variants. The initial dump closes at its end marker; each
+    /// later push closes once `quiet` passes without a row. Choose `quiet`
+    /// longer than the gap between the rows of one push.
+    ///
+    /// Waits without a time limit until the first item arrives.
+    ///
+    /// | Outcome | Result |
+    /// |---|---|
+    /// | Batch-end marker | `Some(Ok(rows))`, the marker last |
+    /// | `quiet` passed after a row | `Some(Ok(rows))` |
+    /// | Stream ended | `Some(Ok(rows))` if any were read, else `None` |
+    /// | Terminal error | `Some(Err(_))`; rows of the partial batch are dropped |
+    ///
+    /// Notices are logged at `warn!`.
+    ///
+    /// Not cancel-safe: dropping the future, as `tokio::select!` does with
+    /// the branches that lose, drops the rows of the partial batch.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use ibapi::prelude::*;
+    /// use ibapi::accounts::PositionUpdate;
+    /// use std::time::Duration;
+    ///
+    /// #[tokio::main]
+    /// async fn main() {
+    ///     let client = Client::connect("127.0.0.1:4002", 100).await.expect("connection failed");
+    ///     let mut subscription = client.positions().await.expect("request failed");
+    ///
+    ///     while let Some(batch) = subscription.next_batch(Duration::from_secs(1)).await {
+    ///         let batch = batch.expect("positions error");
+    ///         let initial = matches!(batch.last(), Some(PositionUpdate::PositionEnd));
+    ///         println!("{} updates (initial dump: {initial})", batch.len());
+    ///     }
+    /// }
+    /// ```
+    pub async fn next_batch(&mut self, quiet: Duration) -> Option<Result<Vec<T>, Error>> {
+        let (rows, stopped) = self
+            .collect_core(Bound::Idle(quiet), |rows| rows.last().is_some_and(T::is_batch_end))
+            .await;
+        stopped.into_batch(rows)
     }
 
     /// Collects every data item until TWS's end marker, with no time bound.
     /// [`collect_to_end_within`](Self::collect_to_end_within) without the
     /// timeout. Not for open-ended subscriptions like market data.
     pub(crate) async fn collect_to_end(&mut self) -> Result<Vec<T>, Error> {
-        let (rows, stopped) = self.collect_core(None, |_| false).await;
+        let (rows, stopped) = self.collect_core(Bound::None, |_| false).await;
         stopped.into_result(rows)
     }
 
-    /// The loop behind every `collect_*`: reads until `deadline` (if any), the
-    /// end of the stream, or [`collect_step`] says to stop.
-    async fn collect_core(&mut self, deadline: Option<tokio::time::Instant>, mut stop: impl FnMut(&[T]) -> bool) -> (Vec<T>, CollectStop) {
+    /// The loop behind every `collect_*` and [`next_batch`](Self::next_batch):
+    /// reads until `bound` runs out, the end of the stream, or [`collect_step`]
+    /// says to stop.
+    async fn collect_core(&mut self, bound: Bound<tokio::time::Instant>, mut stop: impl FnMut(&[T]) -> bool) -> (Vec<T>, CollectStop) {
         let mut rows = Vec::new();
+        let mut deadline = match bound {
+            Bound::At(deadline) => Some(deadline),
+            Bound::None | Bound::Idle(_) => None,
+        };
         loop {
             let item = match deadline {
                 None => self.next().await,
@@ -338,8 +392,14 @@ impl<T: StreamDecoder<T> + Send + 'static> Subscription<T> {
                 };
                 return (rows, stopped);
             };
+            let read = rows.len();
             if let Some(stopped) = collect_step(&mut rows, item, &mut stop) {
                 return (rows, stopped);
+            }
+            if let Bound::Idle(quiet) = bound {
+                if rows.len() > read {
+                    deadline = Some(tokio::time::Instant::now() + quiet);
+                }
             }
         }
     }

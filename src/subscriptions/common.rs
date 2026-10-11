@@ -1,5 +1,7 @@
 //! Common utilities for subscription processing
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::errors::Error;
@@ -99,6 +101,27 @@ impl CollectStop {
             CollectStop::Error(e) => Err(e),
         }
     }
+
+    /// The `next_batch` result: the rows read, `None` once the stream has ended
+    /// with none, or the terminal error (rows of the partial batch dropped).
+    pub(crate) fn into_batch<T>(self, rows: Vec<T>) -> Option<Result<Vec<T>, Error>> {
+        match self {
+            CollectStop::Error(e) => Some(Err(e)),
+            _ => (!rows.is_empty()).then_some(Ok(rows)),
+        }
+    }
+}
+
+/// How long a collect loop reads, generic over the side's `Instant`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Bound<I> {
+    /// Until the stream ends or the loop is told to stop.
+    None,
+    /// Until a fixed instant.
+    At(I),
+    /// Until this long passes without a row, counted from the latest row; no
+    /// limit before the first.
+    Idle(Duration),
 }
 
 /// Applies one item to `rows`. Returns `Some` when collection ends: on a
@@ -271,6 +294,14 @@ pub(crate) trait StreamDecoder<T> {
     /// Returns true if this decoded value represents the end of a snapshot subscription
     #[allow(unused)]
     fn is_snapshot_end(&self) -> bool {
+        false
+    }
+
+    /// Returns true if this decoded value is an end marker that closes a batch
+    /// on a stream that stays open, such as the `End` after an initial dump.
+    /// [`next_batch`](crate::subscriptions::Subscription::next_batch) closes a
+    /// batch on it.
+    fn is_batch_end(&self) -> bool {
         false
     }
 }
