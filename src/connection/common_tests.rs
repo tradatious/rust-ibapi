@@ -1058,23 +1058,44 @@ fn test_connection_metadata_apply_account_info() {
 
 #[test]
 fn test_parse_handshake_ack() {
-    let handler = ConnectionHandler::default();
+    use std::io::ErrorKind;
 
-    let ack = format!("{}\020230405 22:20:39 PST\0", server_versions::PROTOBUF_REST_MESSAGES_3);
-    let (server_version, time, tz) = parse_handshake_ack(&handler, Ok(ack.into_bytes())).unwrap();
-    assert_eq!(server_version, server_versions::PROTOBUF_REST_MESSAGES_3);
-    assert!(time.is_some());
-    assert!(tz.is_some());
-
-    let eof = std::io::Error::from(std::io::ErrorKind::UnexpectedEof);
-    match parse_handshake_ack(&handler, Err(Error::Io(eof))) {
-        Err(Error::ConnectionRejected(msg)) => assert!(msg.contains("server may be rejecting"), "unexpected message: {msg}"),
-        other => panic!("expected Error::ConnectionRejected, got {other:?}"),
+    enum Expect {
+        Ok(i32),
+        Rejected,
+        Io(ErrorKind),
+        Parse,
     }
 
-    let reset = std::io::Error::from(std::io::ErrorKind::ConnectionReset);
-    match parse_handshake_ack(&handler, Err(Error::Io(reset))) {
-        Err(Error::Io(err)) => assert_eq!(err.kind(), std::io::ErrorKind::ConnectionReset),
-        other => panic!("expected Error::Io passthrough, got {other:?}"),
+    let valid = format!("{}\020230405 22:20:39 PST\0", server_versions::PROTOBUF_REST_MESSAGES_3);
+    let io = |kind| -> Result<Vec<u8>, Error> { Err(Error::Io(std::io::Error::from(kind))) };
+
+    let cases = [
+        (
+            "valid reply",
+            Ok(valid.into_bytes()),
+            Expect::Ok(server_versions::PROTOBUF_REST_MESSAGES_3),
+        ),
+        ("unexpected eof", io(ErrorKind::UnexpectedEof), Expect::Rejected),
+        ("other io error", io(ErrorKind::ConnectionReset), Expect::Io(ErrorKind::ConnectionReset)),
+        ("empty reply", Ok(Vec::new()), Expect::Parse),
+        ("non-numeric version", Ok(b"abc\020230405 22:20:39 PST\0".to_vec()), Expect::Parse),
+        ("missing time", Ok(b"213\0".to_vec()), Expect::Parse),
+    ];
+
+    let handler = ConnectionHandler::default();
+    for (name, input, expect) in cases {
+        let result = parse_handshake_ack(&handler, input);
+        match (expect, result) {
+            (Expect::Ok(version), Ok(ack)) => {
+                assert_eq!(ack.server_version, version, "{name}");
+                assert!(ack.connection_time.is_some(), "{name}");
+                assert!(ack.time_zone.is_some(), "{name}");
+            }
+            (Expect::Rejected, Err(Error::ConnectionRejected(msg))) => assert!(msg.contains("server may be rejecting"), "{name}: {msg}"),
+            (Expect::Io(kind), Err(Error::Io(err))) => assert_eq!(err.kind(), kind, "{name}"),
+            (Expect::Parse, Err(Error::Parse(..))) => {}
+            (_, other) => panic!("{name}: unexpected result {other:?}"),
+        }
     }
 }

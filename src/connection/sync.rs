@@ -258,12 +258,12 @@ impl<S: Stream> Connection<S> {
 
         self.socket.write_all(&handshake)?;
 
-        let (server_version, time, tz) = parse_handshake_ack(&self.connection_handler, self.read_startup_frame())?;
+        let ack = parse_handshake_ack(&self.connection_handler, self.read_startup_frame())?;
 
         let mut connection_metadata = self.connection_metadata.lock()?;
-        connection_metadata.server_version = server_version;
-        connection_metadata.connection_time = time;
-        connection_metadata.time_zone = tz;
+        connection_metadata.server_version = ack.server_version;
+        connection_metadata.connection_time = ack.connection_time;
+        connection_metadata.time_zone = ack.time_zone;
         Ok(())
     }
 

@@ -347,23 +347,31 @@ pub(crate) fn require_protobuf_support(server_version: i32) -> Result<(), Error>
     Ok(())
 }
 
-/// Parses the handshake reply into the server version, connection time and
-/// time zone. A reply that ends in `UnexpectedEof` becomes
+/// Handshake reply fields the connection keeps.
+#[derive(Debug)]
+pub(crate) struct HandshakeAck {
+    pub server_version: i32,
+    pub connection_time: Option<OffsetDateTime>,
+    pub time_zone: Option<&'static Tz>,
+}
+
+/// Parses the handshake reply into a [`HandshakeAck`]. A reply that ends in `UnexpectedEof` becomes
 /// [`Error::ConnectionRejected`].
 ///
 /// The reply is read as raw text, bypassing `parse_raw_message`, which would
 /// misinterpret it as binary when server_version >= PROTOBUF (on reconnect).
-pub(crate) fn parse_handshake_ack(
-    handler: &ConnectionHandler,
-    ack: Result<Vec<u8>, Error>,
-) -> Result<(i32, Option<OffsetDateTime>, Option<&'static Tz>), Error> {
+pub(crate) fn parse_handshake_ack(handler: &ConnectionHandler, ack: Result<Vec<u8>, Error>) -> Result<HandshakeAck, Error> {
     match ack {
         Ok(data) => {
             let raw_string = String::from_utf8_lossy(&data).into_owned();
             let mut response = ResponseMessage::from(&raw_string);
             let handshake_data = handler.parse_handshake_response(&mut response)?;
-            let (time, tz) = parse_connection_time(&handshake_data.server_time);
-            Ok((handshake_data.server_version, time, tz))
+            let (connection_time, time_zone) = parse_connection_time(&handshake_data.server_time);
+            Ok(HandshakeAck {
+                server_version: handshake_data.server_version,
+                connection_time,
+                time_zone,
+            })
         }
         Err(Error::Io(err)) if err.kind() == std::io::ErrorKind::UnexpectedEof => Err(Error::ConnectionRejected(format!(
             "server may be rejecting connections from this host: {err}"

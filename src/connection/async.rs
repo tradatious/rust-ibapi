@@ -249,12 +249,12 @@ impl<S: AsyncStream> AsyncConnection<S> {
 
         self.socket.write_all(&handshake).await?;
 
-        let (server_version, time, tz) = parse_handshake_ack(&self.connection_handler, self.socket.read_message().await)?;
+        let ack = parse_handshake_ack(&self.connection_handler, self.socket.read_message().await)?;
 
         let mut connection_metadata = self.connection_metadata.lock().await;
-        self.server_version_cache.store(server_version, Ordering::Release);
-        connection_metadata.connection_time = time;
-        connection_metadata.time_zone = tz;
+        self.server_version_cache.store(ack.server_version, Ordering::Release);
+        connection_metadata.connection_time = ack.connection_time;
+        connection_metadata.time_zone = ack.time_zone;
         Ok(())
     }
 
