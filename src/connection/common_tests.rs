@@ -3,7 +3,7 @@ use crate::common::test_utils::helpers;
 use crate::common::test_utils::helpers::assert_rejects_text_framing;
 use crate::common::test_utils::helpers::{binary_text, proto_error_response, proto_response, CapturingSink};
 use crate::messages::IncomingMessages;
-use crate::messages::{HANDSHAKE_DECODE_FAILURE_CODE, HANDSHAKE_UNKNOWN_FRAME_CODE, UNKNOWN_MESSAGE_TYPE_CODE};
+use crate::messages::{HANDSHAKE_DECODE_FAILURE_CODE, HANDSHAKE_UNKNOWN_FRAME_CODE, MESSAGE_ID_LEN, UNKNOWN_MESSAGE_TYPE_CODE};
 use std::sync::{Arc, Mutex};
 use time::macros::datetime;
 use time_tz::TimeZone;
@@ -389,6 +389,14 @@ fn test_parse_connection_time_china_standard_time() {
     assert!(connection_time.is_some());
     assert!(timezone.is_some());
     assert_eq!(timezone.unwrap().name(), "Asia/Shanghai");
+}
+
+#[test]
+fn test_parse_connection_time_brasilia_standard_time() {
+    // As sent by a pt-BR 10.51 gateway (#964). Brazil has no DST since 2019.
+    let (connection_time, timezone) = parse_connection_time("20261009 10:00:00 Brasilia Standard Time");
+    assert_eq!(connection_time, Some(datetime!(2026-10-09 10:00:00 -03:00)));
+    assert_eq!(timezone.map(|tz| tz.name()), Some("America/Sao_Paulo"));
 }
 
 #[test]
