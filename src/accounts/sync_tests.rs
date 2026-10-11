@@ -972,12 +972,20 @@ fn test_account_summary_snapshots_end_when_subscription_closes() {
 }
 
 #[test]
-fn test_account_summary_snapshots_group_one_push_and_skip_end_without_changes() {
+fn test_account_summary_snapshots_wait_for_end_on_slow_initial_rows_and_skip_end_without_changes() {
     let (mut snapshots, tx) = snapshots_over_channel(Duration::from_millis(50));
 
     tx.send(summary_frame("NetLiquidation", "100.0", "USD")).unwrap();
-    tx.send(summary_frame("BuyingPower", "400.0", "USD")).unwrap();
+    let sender = {
+        let tx = tx.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            tx.send(summary_frame("BuyingPower", "400.0", "USD")).unwrap();
+            tx.send(end_frame()).unwrap();
+        })
+    };
     let first = snapshots.next().unwrap().unwrap();
+    sender.join().unwrap();
 
     tx.send(end_frame()).unwrap();
     tx.send(summary_frame("NetLiquidation", "101.0", "USD")).unwrap();
@@ -1016,5 +1024,28 @@ fn test_client_account_summary_snapshots_sends_request_and_yields_snapshot_at_en
             .group("All")
             .tags([AccountSummaryTags::NET_LIQUIDATION]),
     );
+    assert_request(&message_bus, 1, &cancel_account_summary().request_id(TEST_REQ_ID_FIRST));
+}
+
+#[test]
+fn test_account_summary_snapshots_cancel_sends_cancel_and_ends() {
+    let message_bus = Arc::new(MessageBusStub::with_ordered_responses(vec![
+        proto_response(
+            IncomingMessages::AccountSummary,
+            account_summary().tag("NetLiquidation").value("100.0").currency("USD").encode_proto(),
+        ),
+        proto_response(IncomingMessages::AccountSummaryEnd, account_summary_end().encode_proto()),
+    ]));
+    let client = Client::stubbed(message_bus.clone(), server_versions::SIZE_RULES);
+    let group = AccountGroup("All".to_string());
+
+    let mut snapshots = client
+        .account_summary_snapshots(&group, &[AccountSummaryTags::NET_LIQUIDATION], Duration::from_secs(1))
+        .expect("request account_summary_snapshots failed");
+    snapshots.next().unwrap().unwrap();
+    snapshots.cancel();
+
+    assert!(snapshots.all(|item| item.is_err()), "no snapshot after cancel");
+    assert_eq!(request_message_count(&message_bus), 2);
     assert_request(&message_bus, 1, &cancel_account_summary().request_id(TEST_REQ_ID_FIRST));
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::accounts::AccountSummary;
 
 fn row(account: &str, tag: &str, value: &str, currency: &str) -> AccountSummaryResult {
     AccountSummaryResult::Summary(AccountSummary {
@@ -92,4 +93,18 @@ fn test_end_completes_first_snapshot_even_when_empty_then_only_with_changes() {
     assert!(first_end);
     assert!(!end_without_change);
     assert!(end_with_change);
+}
+
+#[test]
+fn test_quiet_period_armed_only_after_first_snapshot() {
+    let mut builder = SnapshotBuilder::default();
+
+    builder.apply(row("DU1", "NetLiquidation", "100.0", "USD"));
+    let armed_before_first = builder.quiet_armed();
+    builder.take();
+    builder.apply(row("DU1", "NetLiquidation", "100.5", "USD"));
+    let armed_after_first = builder.quiet_armed();
+
+    assert!(!armed_before_first);
+    assert!(armed_after_first);
 }

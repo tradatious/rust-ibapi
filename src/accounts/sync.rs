@@ -177,8 +177,9 @@ impl Client {
     /// # Subscription lifetime
     ///
     /// The subscription stays open until it is dropped or cancelled. TWS first sends the requested
-    /// tags followed by [`AccountSummaryResult::End`], then pushes changed values as further
-    /// [`AccountSummaryResult::Summary`] rows without another `End`. Dropping the subscription cancels
+    /// tags followed by [`AccountSummaryResult::End`], then keeps pushing
+    /// [`AccountSummaryResult::Summary`] rows without another `End`: when values change, and
+    /// periodically, when a push can resend rows whose values did not change. Dropping the subscription cancels
     /// the request.
     ///
     /// # Arguments
@@ -212,11 +213,13 @@ impl Client {
     /// Wraps [`account_summary`](Self::account_summary) and keeps the latest value of every row, so
     /// each [`AccountSummarySnapshot`] holds the whole account rather than only the rows TWS pushed
     /// last. TWS sends one `End` marker after the initial snapshot and none after the rows it pushes
-    /// later, so a snapshot is emitted at an `End` and once no row has arrived for `quiet`. IB
-    /// documents the pushes as every three minutes for the values that changed. A snapshot is
-    /// emitted only when a row changed a value since the previous one, except the first, which is
-    /// emitted at the first `End` even when empty. Choose `quiet` longer than the gap between the
-    /// rows of one push, which arrive within milliseconds of each other.
+    /// later, so the first snapshot is emitted at the first `End`, even when empty, and each later
+    /// one once no row has arrived for `quiet`. Pushes arrive when values change and periodically
+    /// (IB documents every three minutes), and a push can resend unchanged rows. A later snapshot is
+    /// emitted only when a row changed a value since the previous one. Choose `quiet` longer than
+    /// the gap between the rows of one push, which arrive within milliseconds of each other.
+    ///
+    /// To fold the rows with your own batching instead, use [`AccountSummarySnapshot::apply`].
     ///
     /// Notices that arrive on the subscription are dropped.
     ///
@@ -573,6 +576,14 @@ impl std::fmt::Debug for AccountSummarySnapshots {
     }
 }
 
+impl AccountSummarySnapshots {
+    /// Cancels the underlying subscription. Iteration then ends, after a final snapshot of any rows
+    /// not yet emitted.
+    pub fn cancel(&self) {
+        self.subscription.cancel();
+    }
+}
+
 impl Iterator for AccountSummarySnapshots {
     type Item = Result<AccountSummarySnapshot, Error>;
 
@@ -585,7 +596,7 @@ impl Iterator for AccountSummarySnapshots {
             // `next_timeout` returns `None` for a timeout and for an ended subscription alike. Either
             // way the pending rows are complete, and an ended subscription then returns `None` from
             // the blocking `next` below.
-            let item = if self.builder.has_pending() {
+            let item = if self.builder.quiet_armed() {
                 match self.subscription.next_timeout(self.quiet) {
                     Some(item) => Some(item),
                     None => return Some(Ok(self.builder.take())),
@@ -602,7 +613,7 @@ impl Iterator for AccountSummarySnapshots {
                 }
                 Some(Ok(SubscriptionItem::Notice(_))) => {}
                 Some(Err(e)) => return Some(Err(e)),
-                None => return None,
+                None => return self.builder.has_pending().then(|| Ok(self.builder.take())),
             }
         }
     }

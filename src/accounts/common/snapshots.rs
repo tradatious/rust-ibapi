@@ -1,6 +1,6 @@
 //! Folds account summary rows into snapshots, shared by the sync and async clients.
 
-use super::super::{AccountSummary, AccountSummaryResult, AccountSummarySnapshot};
+use super::super::{AccountSummaryResult, AccountSummarySnapshot};
 
 /// Accumulates rows into a snapshot and tracks whether a row changed a value since the last
 /// snapshot was taken.
@@ -17,7 +17,7 @@ impl SnapshotBuilder {
     pub(in crate::accounts) fn apply(&mut self, result: AccountSummaryResult) -> bool {
         match result {
             AccountSummaryResult::Summary(summary) => {
-                self.insert(summary);
+                self.pending |= self.snapshot.apply(summary);
                 false
             }
             AccountSummaryResult::End => self.pending || !self.emitted,
@@ -29,21 +29,17 @@ impl SnapshotBuilder {
         self.pending
     }
 
+    /// Returns `true` when pending rows should complete after the quiet period. Only after the
+    /// first snapshot: until then the initial `End` completes it, however slowly the rows arrive.
+    pub(in crate::accounts) fn quiet_armed(&self) -> bool {
+        self.pending && self.emitted
+    }
+
     /// Returns a copy of the current snapshot and clears the pending flag.
     pub(in crate::accounts) fn take(&mut self) -> AccountSummarySnapshot {
         self.pending = false;
         self.emitted = true;
         self.snapshot.clone()
-    }
-
-    fn insert(&mut self, summary: AccountSummary) {
-        let key = (summary.account.clone(), summary.tag.clone(), summary.currency.clone());
-        let changed = self.snapshot.rows.get(&key) != Some(&summary);
-
-        if changed {
-            self.snapshot.rows.insert(key, summary);
-            self.pending = true;
-        }
     }
 }
 
