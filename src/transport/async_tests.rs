@@ -6,6 +6,8 @@
 //! binary-text-payload framing that `parse_raw_message` expects post-floor-213:
 //! `[4-byte BE msg_id][NUL-delimited remaining fields]`, produced by `body()`.
 
+use crate::common::test_utils::helpers::order_status_frame;
+use crate::orders::OrderStatusKind;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -96,7 +98,7 @@ async fn test_channel_classes_under_small_channel_capacity() {
     assert_capacity_and_class("order", &mut order, send, ORDER_CAPACITY, ChannelClass::Order).await;
 
     let mut updates = bus.create_order_update_subscription().await.unwrap();
-    let sender = bus.order_update_stream.lock().unwrap().as_ref().unwrap().sender.clone();
+    let sender = bus.order_taps.updates_sender().unwrap();
     let send = || drop(sender.send(cancelled()));
     assert_capacity_and_class(
         "order update stream",
@@ -333,7 +335,7 @@ async fn test_create_order_update_subscription_after_shutdown_fails() {
 
     let err = mb.create_order_update_subscription().await.err().expect("subscribe after shutdown");
     assert!(matches!(err, Error::Shutdown), "got: {err:?}");
-    assert!(bus.order_update_stream.lock().unwrap().is_none());
+    assert!(bus.order_taps.updates_lease().is_none());
 }
 
 /// Shutdown ends a live notice stream, and one opened afterwards is already
@@ -478,10 +480,7 @@ async fn test_order_frame_routes_while_a_dropped_order_update_stream_awaits_clea
     // before the frame is routed.
     let cleanup_gate = bus.cleanup_gate.lock().await;
     drop(updates);
-    assert!(
-        bus.order_update_stream.lock().unwrap().is_some(),
-        "the dropped stream is still registered"
-    );
+    assert!(bus.order_taps.updates_lease().is_some(), "the dropped stream is still registered");
 
     stream.push_inbound(binary_proto(
         crate::messages::IncomingMessages::OrderStatus as i32,
@@ -1852,10 +1851,7 @@ async fn test_drop_then_recreate_order_update_stream() {
 
     // Process s1's stale OrderUpdateStream signal; s2's registration survives.
     drain_cleanup_signals(&bus).await;
-    let sender = {
-        let stream = bus.order_update_stream.lock().unwrap();
-        stream.as_ref().expect("stale cleanup cleared the replacement stream").sender.clone()
-    };
+    let sender = bus.order_taps.updates_sender().expect("stale cleanup cleared the replacement stream");
     sender
         .send(RoutedItem::Error(Error::Cancelled))
         .expect("replacement stream has no receivers");
@@ -1865,7 +1861,7 @@ async fn test_drop_then_recreate_order_update_stream() {
 
     drop(s2);
     drain_cleanup_signals(&bus).await;
-    assert!(bus.order_update_stream.lock().unwrap().is_none(), "order update stream leaked");
+    assert!(bus.order_taps.updates_lease().is_none(), "order update stream leaked");
 }
 
 /// `reset_channels` after reconnect: every in-flight request and order
@@ -2364,4 +2360,82 @@ async fn test_rate_limiter_awaits_without_blocking_runtime() -> Result<(), Error
         started.elapsed()
     );
     Ok(())
+}
+
+/// A status that arrived before the stream opened — an order filled between
+/// `submit()` and `wait_for_fill` — is the stream's first item.
+#[tokio::test]
+async fn test_order_status_stream_starts_with_earlier_status() {
+    let (stream, bus) = make_bus();
+
+    stream.push_inbound(order_status_frame(7, OrderStatusKind::Filled));
+    bus.read_and_route_message().await.unwrap();
+
+    let mut statuses = bus.create_order_status_subscription(OrderId::from(7)).await.unwrap();
+    assert_eq!(next_message(&mut statuses).await.order_id(), Some(7));
+}
+
+/// The stream gets a copy: the `place_order` subscription for the same order
+/// and the order-update stream still receive the frame.
+#[tokio::test]
+async fn test_order_status_stream_takes_nothing_from_other_routes() {
+    let (stream, bus) = make_bus();
+
+    let mut order = bus.send_order_request(OrderId::from(7), vec![]).await.unwrap();
+    let mut updates = bus.create_order_update_subscription().await.unwrap();
+    let mut statuses = bus.create_order_status_subscription(OrderId::from(7)).await.unwrap();
+
+    stream.push_inbound(order_status_frame(7, OrderStatusKind::Submitted));
+    bus.read_and_route_message().await.unwrap();
+
+    assert_eq!(next_message(&mut statuses).await.order_id(), Some(7));
+    assert_eq!(next_message(&mut order).await.order_id(), Some(7));
+    assert_eq!(next_message(&mut updates).await.order_id(), Some(7));
+}
+
+/// A status for an order no route claims still reaches its status stream.
+#[tokio::test]
+async fn test_order_status_stream_sees_unrouted_status() {
+    let (stream, bus) = make_bus();
+
+    let mut statuses = bus.create_order_status_subscription(OrderId::from(7)).await.unwrap();
+    stream.push_inbound(order_status_frame(7, OrderStatusKind::Submitted));
+    bus.read_and_route_message().await.unwrap();
+
+    assert_eq!(next_message(&mut statuses).await.order_id(), Some(7));
+}
+
+#[tokio::test]
+async fn test_order_status_stream_ends_on_reset_and_shutdown() {
+    let (_stream, bus) = make_bus();
+
+    let mut statuses = bus.create_order_status_subscription(OrderId::from(7)).await.unwrap();
+    bus.reset_channels().await;
+    let item = tokio::time::timeout(TICK, statuses.next_routed()).await.expect("no item");
+    assert!(matches!(item, Some(RoutedItem::Error(Error::ConnectionReset))), "{item:?}");
+
+    let mut statuses = bus.create_order_status_subscription(OrderId::from(7)).await.unwrap();
+    bus.request_shutdown();
+    let item = tokio::time::timeout(TICK, statuses.next_routed()).await.expect("no item");
+    assert!(matches!(item, Some(RoutedItem::Error(Error::Shutdown))), "{item:?}");
+    assert!(matches!(
+        bus.create_order_status_subscription(OrderId::from(7)).await,
+        Err(Error::Shutdown)
+    ));
+}
+
+/// A wait abandoned by its caller (an outer `timeout` or `select!` dropping
+/// the future) releases its status stream, and the order's entry with it.
+#[tokio::test]
+async fn test_abandoned_order_status_wait_is_released() {
+    let (_stream, bus) = make_bus();
+
+    let wait = async {
+        let mut statuses = bus.create_order_status_subscription(OrderId::from(7)).await.unwrap();
+        statuses.next_routed().await
+    };
+    assert!(tokio::time::timeout(Duration::from_millis(20), wait).await.is_err(), "nothing was sent");
+    drain_cleanup_signals(&bus).await;
+
+    assert!(!bus.order_taps.has_status_entry(OrderId::from(7)), "status stream outlived its wait");
 }
